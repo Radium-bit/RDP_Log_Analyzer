@@ -6,7 +6,7 @@ $MAX_DAY = 30      # 显示日期范围
 # 设置时间范围
 $startTime = (Get-Date).AddDays(-$MAX_DAY).Date
 
-# 定义常见的登录失败原因映射表
+# 常见登录失败原因映射
 $failureReasonMap = @{
     '%%2305' = '指定的用户帐户已过期'
     '%%2309' = '指定帐户的密码已过期'
@@ -16,56 +16,52 @@ $failureReasonMap = @{
     '%%2313' = '用户名或密码错误'
 }
 
-# 获取最近一个月的 RDP 登录成功事件（事件ID 1149）
+# 获取RDP登录成功事件（事件ID 1149）
 $successEvents = Get-WinEvent -FilterHashtable @{
     LogName   = 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'
     ID        = 1149
     StartTime = $startTime
 } -ErrorAction SilentlyContinue
 
-Write-Host "`n=== 登录日志 ===`n"
-
-# 解析并显示成功事件（带过滤和限制）
+# 解析显示成功事件
 $successEvents | ForEach-Object {
-    $messageLines = $_.Message -split "`n"
+    # 转化为完整的XML文档对象
+    $xmlDoc = New-Object System.Xml.XmlDocument
+    $xmlDoc.LoadXml($_.ToXml())
     
-    $user = ($messageLines | 
-        Where-Object { $_ -match "用户:" } | 
-        ForEach-Object { ($_ -split '用户:')[1].Trim() }
-    )
+    # 命名空间管理器
+    $nsManager = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
+    $nsManager.AddNamespace("evt", $xmlDoc.DocumentElement.NamespaceURI)
+    $nsManager.AddNamespace("data", "Event_NS")
 
-    $domain = ($messageLines | 
-        Where-Object { $_ -match "域:" } | 
-        ForEach-Object { ($_ -split '域:')[1].Trim() }
-    )
-
-    $sourceIP = ($messageLines | 
-        Where-Object { $_ -match "源网络地址:" } | 
-        ForEach-Object { ($_ -split '源网络地址:')[1].Trim() }
+    # 修正后XPath查询
+    $userData = $xmlDoc.SelectSingleNode(
+        "//evt:UserData/data:EventXML", 
+        $nsManager
     )
 
     [PSCustomObject]@{
         TimeCreated = $_.TimeCreated
-        User        = $user
-        Domain      = $domain
-        SourceIP    = $sourceIP
+        User        = if ($userData.Param1) { $userData.Param1 } else { "-" }
+        Domain      = if ($userData.Param2) { $userData.Param2 } else { "-" }
+        SourceIP    = if ($userData.Param3) { $userData.Param3 } else { "-" }
     }
 } | Where-Object {
-    # 用户过滤逻辑
+    # 过滤器
     $USER_FILTER.Count -eq 0 -or $USER_FILTER -contains $_.User
 } | Select-Object -First $MAX_LENGTH | Sort-Object TimeCreated |
 Format-Table -AutoSize -Property TimeCreated, User, Domain, SourceIP
 
 Write-Host "`n=== 失败日志 ===`n"
 
-# 获取登录失败事件（事件 ID 4625）
+# 取得登录失败事件（事件ID 4625）
 $failureEvents = Get-WinEvent -FilterHashtable @{
     LogName   = 'Security'
     ID        = 4625
     StartTime = $startTime
 } -ErrorAction SilentlyContinue
 
-# 解析并显示失败事件（带过滤和限制）
+# 解析失败事件
 $failureEvents | ForEach-Object {
     $xml = [xml]$_.ToXml()
     $data = @{}
@@ -73,18 +69,20 @@ $failureEvents | ForEach-Object {
     
     [PSCustomObject]@{
         TimeCreated     = $_.TimeCreated
-        AccountName     = $data['TargetUserName']
-        AccountDomain   = $data['TargetDomainName']
-        FailureReason   = if ($failureReasonMap.ContainsKey($data['FailureReason'])) {
-            $failureReasonMap[$data['FailureReason']]
-        } else {
-            $data['FailureReason']
-        }
-        SourceIPAddress = $data['IpAddress']
-        SourcePort      = $data['IpPort']
+        AccountName     = if ($data['TargetUserName']) { $data['TargetUserName'] } else { "-" }
+        AccountDomain   = if ($data['TargetDomainName']) { $data['TargetDomainName'] } else { "-" }
+        FailureReason   = if ($data['FailureReason']) {
+            if ($failureReasonMap.ContainsKey($data['FailureReason'])) {
+                $failureReasonMap[$data['FailureReason']]
+            } else {
+                $data['FailureReason']
+            }
+        } else { "-" }
+        SourceIPAddress = if ($data['IpAddress']) { $data['IpAddress'] } else { "-" }
+        SourcePort      = if ($data['IpPort']) { $data['IpPort'] } else { "-" }
     }
 } | Where-Object {
-    # 用户过滤逻辑
+    # 过滤和排序
     $USER_FILTER.Count -eq 0 -or $USER_FILTER -contains $_.AccountName
 } | Sort-Object TimeCreated -Descending | 
 Select-Object -First $MAX_LENGTH | 
