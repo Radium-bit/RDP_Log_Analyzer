@@ -84,6 +84,6 @@ $failureEvents | ForEach-Object {
 } | Where-Object {
     # 过滤和排序
     $USER_FILTER.Count -eq 0 -or $USER_FILTER -contains $_.AccountName
-} | Sort-Object TimeCreated | 
-Select-Object -First $MAX_LENGTH | 
+} | Select-Object -First $MAX_LENGTH |
+Sort-Object TimeCreated |
 Format-Table -AutoSize
